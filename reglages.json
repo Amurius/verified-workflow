@@ -1,0 +1,10 @@
+{
+  "seuil_fichiers": 1,
+  "petite_modification": { "fichiers": 2, "lignes": 60 },
+  "toujours_verifier": [
+    "*.sql", "*/migrations/*", "*/drizzle/*", "schema.ts", "models.py",
+    "docker-compose*.y*ml", "compose*.y*ml", "Dockerfile*",
+    "package.json", "pyproject.toml", "requirements*.txt",
+    ".env*", "*/auth/*"
+  ]
+}

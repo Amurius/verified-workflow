@@ -1,0 +1,15 @@
+{
+  "name": "verified-workflow",
+  "description": "Agents spécialisés pour Claude Code et vérification obligatoire après chaque modification.",
+  "owner": {
+    "name": "Amurius"
+  },
+  "plugins": [
+    {
+      "name": "verified-workflow",
+      "source": "./",
+      "description": "Agents spécialisés et vérification obligatoire après chaque modification.",
+      "version": "1.6.0"
+    }
+  ]
+}

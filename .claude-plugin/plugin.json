@@ -1,0 +1,19 @@
+{
+  "name": "verified-workflow",
+  "version": "1.6.0",
+  "description": "Agents spécialisés (recherche exhaustive, analyse de code, débogage, vérification indépendante, audit) et vérification obligatoire après chaque modification de code, avec garde-fou pour une production Docker sur la même machine. Linux, en français.",
+  "author": {
+    "name": "Amurius",
+    "url": "https://github.com/Amurius"
+  },
+  "homepage": "https://github.com/Amurius/verified-workflow",
+  "repository": "https://github.com/Amurius/verified-workflow",
+  "license": "MIT",
+  "keywords": [
+    "agents",
+    "verification",
+    "audit",
+    "debug",
+    "search"
+  ]
+}
