@@ -273,7 +273,7 @@ def decider(journal: list, entree: dict, maintenant: float, rapports, reglages: 
                 else:
                     decision["note"] = (
                         "verified-workflow : limite de %d vérifications en ÉCHEC atteinte ; %d fichier(s) modifié(s) "
-                        "depuis restent non vérifiés (%s). L'utilisateur décide de la suite." % (
+                        "depuis restent non vérifiés (%s) : corrige seulement le critique, note le reste." % (
                             limite, len(fichiers), ", ".join(os.path.basename(f) for f in fichiers[:5])))
                 return decision
             # Après un ÉCHEC, les modifications suivantes sont des corrections : elles se vérifient de façon
