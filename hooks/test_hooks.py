@@ -384,6 +384,114 @@ def essais_hooks(b: Banc) -> None:
     b.modifier()
     b.finir("v1", rapport("VALIDÉ", "NON"))
     assert "sans vérification" in b.fin_de_tour() and os.path.exists(b.copie(b.page))
+    # ... et le message propose une vérification ciblée, à partir du rapport gardé de l'ÉCHEC
+    b.repartir()
+    b.modifier()
+    b.lancer("v1")
+    b.finir("v1", rapport("ÉCHEC", "NON") + "## Preuves\nLe point 2 tombe.\n")
+    garde: str = os.path.join(b.session, "rapports", "v1.md")
+    assert os.path.isfile(garde) and "Le point 2 tombe." in open(garde).read(), "le rapport du verifier est gardé"
+    assert os.stat(garde).st_mode & 0o777 == 0o600, "le rapport gardé est privé"
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "vérification ciblée" in raison and garde in raison and "rendu ÉCHEC" in raison, raison
+    # Sans ÉCHEC précédent, pas de vérification ciblée proposée
+    b.repartir()
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "sans vérification" in raison and "Le dernier verifier a rendu" not in raison
+    # Verdict venu seulement du transcript (agent en arrière-plan) : le rapport est gardé au moment du message
+    b.repartir()
+    b.modifier()
+    b.lancer("v2")
+    b.hook("SubagentStop", agent_id="v2", agent_type=VERIFIER, last_assistant_message="Je lance les tests.")
+    b.notification("v2", rapport("ÉCHEC", "NON") + "## Preuves\nVu dans le transcript.\n")
+    b.fin_de_tour()
+    b.modifier()
+    raison = b.fin_de_tour()
+    garde = os.path.join(b.session, "rapports", "v2.md")
+    assert "vérification ciblée" in raison and garde in raison, raison
+    assert "Vu dans le transcript." in open(garde).read()
+    # Un rapport validé est gardé aussi, mais une modification après validation n'appelle pas de ciblée
+    b.repartir()
+    b.modifier()
+    b.lancer("v3")
+    b.finir("v3", rapport("VALIDÉ", "NON"))
+    assert b.fin_de_tour() == ""
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "sans vérification" in raison and "Le dernier verifier a rendu" not in raison
+    # --- Limite : trois vérifications en ÉCHEC, et le hook n'exige plus de nouveau verifier
+    b.repartir()
+    for numero in (1, 2, 3):
+        b.modifier()
+        if numero > 1:
+            assert "vérification ciblée" in b.fin_de_tour(), "avant la limite, une ciblée est demandée"
+        b.lancer("l%d" % numero)
+        b.finir("l%d" % numero, rapport("ÉCHEC", "NON"))
+        assert b.fin_de_tour() == ""
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "3 vérifications ont rendu ÉCHEC" in raison and "ne relance plus de vérification sur du non-critique" in raison and "se corrige toujours" in raison, raison
+    assert os.path.join(b.session, "rapports", "l3.md") in raison and b.page in raison
+    b.modifier()
+    sortie: dict = b.hook("Stop", background_tasks=[])
+    assert "decision" not in sortie and "limite de 3" in sortie.get("systemMessage", ""), "une fois la limite dite : une note, pas de boucle"
+    # L'utilisateur autorise une vérification de plus : un nouvel ÉCHEC redit la limite une fois
+    b.lancer("l4")
+    b.finir("l4", rapport("ÉCHEC", "NON"))
+    b.modifier()
+    assert "4 vérifications ont rendu ÉCHEC" in b.fin_de_tour()
+    # ... et une validation remet le compteur à zéro
+    b.lancer("l5")
+    b.finir("l5", rapport("VALIDÉ", "NON"))
+    assert b.fin_de_tour() == ""
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "sans vérification" in raison and "ont rendu ÉCHEC" not in raison
+    # Verdicts venus seulement du transcript (verifiers en arrière-plan) : ils comptent pour la limite
+    b.repartir()
+    for numero in (1, 2, 3):
+        b.modifier()
+        b.fin_de_tour()
+        b.lancer("t%d" % numero)
+        b.hook("SubagentStop", agent_id="t%d" % numero, agent_type=VERIFIER, last_assistant_message="Je lance les tests.")
+        b.notification("t%d" % numero, rapport("ÉCHEC", "NON"))
+        b.fin_de_tour()
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "3 vérifications ont rendu ÉCHEC" in raison, raison[:200]
+    assert all(os.path.isfile(os.path.join(b.session, "rapports", "t%d.md" % n)) for n in (1, 2, 3))
+    # Un réglage invalide est ignoré : la limite par défaut (3) tient
+    for invalide in ('"1"', "-1", "true", "2.5", "null", "[1]"):
+        b.repartir()
+        b.regler('{"max_verifications": %s}' % invalide)
+        b.modifier()
+        b.lancer("i1")
+        b.finir("i1", rapport("ÉCHEC", "NON"))
+        b.modifier()
+        raison = b.fin_de_tour()
+        assert "Le dernier verifier a rendu" in raison and "ont rendu ÉCHEC depuis" not in raison, invalide
+    b.regler()
+    # Un agent_id très long ou hostile reste dans rapports/, sous un nom court
+    b.repartir()
+    b.modifier()
+    b.lancer("é" * 200)
+    b.finir("é" * 200, rapport("ÉCHEC", "NON"))
+    noms: list = os.listdir(os.path.join(b.session, "rapports"))
+    assert len(noms) == 1 and len(noms[0].encode()) <= 104, noms
+    # Limite réglable, 0 : pas de limite
+    b.repartir()
+    b.regler({"max_verifications": 0})
+    for numero in (1, 2, 3):
+        b.modifier()
+        b.fin_de_tour()
+        b.lancer("m%d" % numero)
+        b.finir("m%d" % numero, rapport("ÉCHEC", "NON"))
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "Le dernier verifier a rendu" in raison and "ont rendu ÉCHEC depuis" not in raison, repr(raison[:300])
+    b.regler()
     # Une notification intermédiaire (l'agent attend son propre travail) n'est pas un rapport sans verdict
     b.repartir()
     b.modifier()
