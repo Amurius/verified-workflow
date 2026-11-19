@@ -9,7 +9,7 @@
       "name": "verified-workflow",
       "source": "./",
       "description": "Agents spécialisés et vérification obligatoire après chaque modification.",
-      "version": "1.7.0"
+      "version": "1.7.1"
     }
   ]
 }

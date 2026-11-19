@@ -217,12 +217,10 @@ def decider(journal: list, entree: dict, maintenant: float, rapports, reglages: 
     if dernier:
         verdict = verdict_de(identifiant, instant_verifier)
         if not verdict and identifiant not in actifs:
+            # Un verdict venu du transcript est déjà au journal (`noter_verdicts_du_transcript`) : le transcript ne
+            # sert plus qu'à dire ce qu'un verifier a répondu sans verdict
             recus: list = [(t, texte) for t, texte in rapports(identifiant) if t >= instant_verifier]
-            for instant, texte in recus:
-                lu: dict = lire_verdict(texte)
-                if lu:
-                    verdict = dict(lu, t=instant)
-            if not verdict and not en_cours and not shells:
+            if not en_cours and not shells:
                 fins: list = [e for e in journal if e["ev"] == "agent_fin" and e.get("agent_id") == identifiant and e["t"] >= instant_verifier]
                 if fins:
                     dernier_message = fins[-1].get("apercu") or ""
@@ -256,14 +254,12 @@ def decider(journal: list, entree: dict, maintenant: float, rapports, reglages: 
         if due:
             details: dict = {"modifs": non_verifiees, "anciennes": len(non_verifiees) - len(nouvelles), "sensibles": sensibles}
             # Limite : après N vérifications en ÉCHEC depuis la dernière validation, on ne boucle plus. Le hook
-            # demande une fois de présenter ce qui reste à l'utilisateur, puis le note seulement.
+            # demande une fois de trier (le critique se corrige, le reste se note), puis le note seulement.
             limite: int = int(reglages.get("max_verifications") or 0)
             echecs: set = {
                 e.get("agent_id") for e in lancements
                 if e["t"] > generation and (verdict_de(e.get("agent_id") or "", e["t"]).get("verdict") == "ÉCHEC")
             }
-            if dernier and verdict and verdict["verdict"] == "ÉCHEC":
-                echecs.add(identifiant)
             if limite and len(echecs) >= limite:
                 details["echecs"] = len(echecs)
                 details["limite"] = limite
@@ -612,14 +608,6 @@ def fin_de_tour(entree: dict) -> None:
     if relance and blocages_de_la_relance(journal) >= MAX_BLOCAGES_PAR_RELANCE:
         return
     motif, details = decision["blocage"]
-    precedent: dict = (details.get("precedent") or {}) if motif in ("dette", "limite") else {}
-    chemin_precedent: str = commun.chemin_rapport(session_id, precedent.get("agent_id"))
-    if chemin_precedent and not os.path.isfile(chemin_precedent):
-        # Verdict lu dans le transcript (agent en arrière-plan) : le rapport n'a pas encore été gardé
-        for _, texte in reversed(rapports_du_transcript(entree.get("transcript_path"), precedent.get("agent_id") or "")):
-            if lire_verdict(texte):
-                commun.enregistrer_rapport(session_id, precedent.get("agent_id"), texte)
-                break
     if motif == "dette":
         message: str = message_dette(session_id, details, reglages)
     elif motif == "limite":
