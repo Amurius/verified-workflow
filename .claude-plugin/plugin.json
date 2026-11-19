@@ -1,6 +1,6 @@
 {
   "name": "verified-workflow",
-  "version": "1.7.0",
+  "version": "1.7.1",
   "description": "Agents spécialisés (recherche exhaustive, analyse de code, débogage, vérification indépendante, audit) et vérification obligatoire après chaque modification de code, avec garde-fou pour une production Docker sur la même machine. Linux, en français.",
   "author": {
     "name": "Amurius",

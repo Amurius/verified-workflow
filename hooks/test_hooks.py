@@ -462,6 +462,35 @@ def essais_hooks(b: Banc) -> None:
     raison = b.fin_de_tour()
     assert "3 vérifications ont rendu ÉCHEC" in raison, raison[:200]
     assert all(os.path.isfile(os.path.join(b.session, "rapports", "t%d.md" % n)) for n in (1, 2, 3))
+    # Le verdict d'un verifier fini par SubagentStop n'est pas noté une seconde fois depuis le transcript
+    b.repartir()
+    b.modifier()
+    b.lancer("d1")
+    b.finir("d1", rapport("ÉCHEC", "NON"))
+    b.notification("d1", rapport("ÉCHEC", "NON"))
+    for _ in range(3):
+        b.fin_de_tour()
+    assert [e.get("source") for e in b.journal() if e["ev"] == "agent_fin" and e.get("agent_id") == "d1"] == [None], "pas de doublon"
+    # Une notification antérieure au lancement de l'agent ne donne pas son verdict
+    b.repartir()
+    b.modifier()
+    b.notification("d2", rapport("ÉCHEC", "NON"))
+    time.sleep(1.1)  # l'horodatage du transcript est à la seconde, un cran après l'instant d'écriture
+    b.lancer("d2")
+    b.fin_de_tour()
+    assert not [e for e in b.journal() if e["ev"] == "agent_fin" and e.get("agent_id") == "d2"], "verdict d'avant le lancement ignoré"
+    # Le verdict d'un verifier d'avant la dernière validation n'est pas repris
+    b.repartir()
+    b.modifier()
+    b.lancer("d3")
+    b.hook("SubagentStop", agent_id="d3", agent_type=VERIFIER, last_assistant_message="Je lance les tests.")
+    b.lancer("d4")
+    b.finir("d4", rapport("VALIDÉ", "NON"))
+    b.fin_de_tour()
+    b.notification("d3", rapport("ÉCHEC", "NON"))
+    b.fin_de_tour()
+    assert not [e for e in b.journal() if e["ev"] == "agent_fin" and e.get("agent_id") == "d3" and e.get("verdict")], \
+        "verifier d'avant l'archive : son verdict tardif n'est pas repris"
     # Un réglage invalide est ignoré : la limite par défaut (3) tient
     for invalide in ('"1"', "-1", "true", "2.5", "null", "[1]"):
         b.repartir()
