@@ -374,7 +374,7 @@ def message_dette(session_id: str, details: dict, reglages: object = None) -> st
     taille: str = "Taille : %d fichier(s)%s." % (len(chemins), ", environ %d lignes changées" % changees if changees is not None else "")
     if (not details.get("sensibles") and changees is not None
             and len(chemins) <= int(bornes.get("fichiers", 2)) and changees <= int(bornes.get("lignes", 60))):
-        taille += (" C'est une petite modification : écris « petite modification » en tête du brief, le verifier "
+        taille += (" C'est une petite modification : écris « petite modification » en tête du brief (juste après « vérification ciblée » si elle est proposée), le verifier "
                    "la prouvera lui-même, sans lancer d'agents.")
     elif details.get("sensibles"):
         taille += " Fichier(s) à vérifier quoi qu'il arrive : %s." % ", ".join(os.path.basename(f) for f in details["sensibles"][:5])
@@ -405,13 +405,14 @@ def message_limite(session_id: str, details: dict) -> str:
     rapport: str = commun.chemin_rapport(session_id, (details.get("precedent") or {}).get("agent_id"))
     return (
         "%d vérifications ont rendu ÉCHEC depuis la dernière validation : c'est la limite (%d, réglage "
-        "`max_verifications`). Ne relance pas de verifier de toi-même, pour ne pas boucler.\n\n"
+        "`max_verifications`). Pour ne pas boucler, ne relance plus de vérification sur du non-critique.\n\n"
         "Fichiers modifiés depuis la dernière vérification, non vérifiés :\n%s\n\n"
         "Rapport de la dernière vérification : %s\n\n"
-        "Présente à l'utilisateur ce que la dernière vérification a relevé, ce qui a été corrigé depuis sans être "
-        "vérifié, et ce qui reste ouvert. Laisse-le trancher : accepter en l'état avec ces réserves, autoriser une "
-        "vérification de plus (ciblée), ou arrêter. Tant qu'il n'a pas tranché, ces fichiers restent signalés sans "
-        "bloquer." % (details.get("echecs", 0), details.get("limite", 0), "\n".join(lignes),
+        "Trie ce que la dernière vérification a relevé. Un défaut critique (faille de sécurité, perte ou corruption de "
+        "données, migration fautive, fonction demandée qui ne marche pas, plantage) se corrige toujours, puis passe "
+        "une vérification ciblée sur cette seule correction : la limite ne l'empêche pas. Le reste se note dans la "
+        "liste « À reprendre » du projet, sans relancer de vérification, et le travail avance. Dis à l'utilisateur ce "
+        "qui a été noté. Ces fichiers restent signalés sans bloquer." % (details.get("echecs", 0), details.get("limite", 0), "\n".join(lignes),
                       rapport if rapport and os.path.isfile(rapport) else "non gardé")
     )
 
@@ -554,6 +555,29 @@ def blocages_de_la_relance(journal: list) -> int:
     return nombre
 
 
+def noter_verdicts_du_transcript(session_id: str, journal: list, transcript: object) -> bool:
+    """Un verifier en arrière-plan peut rendre son verdict seulement par sa notification dans le transcript. Ce
+    verdict est noté au journal, comme s'il était arrivé à SubagentStop : sans cela, les ÉCHEC successifs ne se
+    compteraient pas et la limite `max_verifications` ne se déclencherait jamais. Rend True si le journal a changé."""
+    generation: float = max((e["t"] for e in journal if e["ev"] == "archive"), default=0.0)
+    lances: dict = {e.get("agent_id"): e for e in journal
+                    if e["ev"] == "agent_debut" and commun.est_verifier(e.get("agent_type")) and e["t"] > generation}
+    change: bool = False
+    for agent_id, lancement in lances.items():
+        if not agent_id or any(e["ev"] == "agent_fin" and e.get("agent_id") == agent_id and e.get("verdict")
+                               and e["t"] >= lancement["t"] for e in journal):
+            continue
+        for instant, texte in reversed(rapports_du_transcript(transcript, agent_id)):
+            lu: dict = lire_verdict(texte)
+            if lu and instant >= lancement["t"]:
+                commun.enregistrer_rapport(session_id, agent_id, texte)
+                commun.noter(session_id, "agent_fin", agent_id=agent_id, agent_type=lancement.get("agent_type"),
+                             source="transcript", **lu)
+                change = True
+                break
+    return change
+
+
 def fin_de_tour(entree: dict) -> None:
     """`stop_hook_active` (Claude continue déjà parce qu'un hook l'a relancé) ne suffit pas à se taire : un
     verdict peut arriver pendant cette relance, et il faut alors archiver et signaler le visuel. Ce qui
@@ -565,6 +589,8 @@ def fin_de_tour(entree: dict) -> None:
     journal: list = commun.lire_journal(session_id)
     if not journal:
         return
+    if noter_verdicts_du_transcript(session_id, journal, entree.get("transcript_path")):
+        journal = commun.lire_journal(session_id)
     relance: bool = bool(entree.get("stop_hook_active"))
     reglages: dict = commun.reglages()
     decision: dict = decider(

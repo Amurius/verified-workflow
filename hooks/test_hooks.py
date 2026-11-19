@@ -399,7 +399,7 @@ def essais_hooks(b: Banc) -> None:
     b.repartir()
     b.modifier()
     raison = b.fin_de_tour()
-    assert "sans vérification" in raison and "vérification ciblée" not in raison
+    assert "sans vérification" in raison and "Le dernier verifier a rendu" not in raison
     # Verdict venu seulement du transcript (agent en arrière-plan) : le rapport est gardé au moment du message
     b.repartir()
     b.modifier()
@@ -420,7 +420,7 @@ def essais_hooks(b: Banc) -> None:
     assert b.fin_de_tour() == ""
     b.modifier()
     raison = b.fin_de_tour()
-    assert "sans vérification" in raison and "vérification ciblée" not in raison
+    assert "sans vérification" in raison and "Le dernier verifier a rendu" not in raison
     # --- Limite : trois vérifications en ÉCHEC, et le hook n'exige plus de nouveau verifier
     b.repartir()
     for numero in (1, 2, 3):
@@ -432,7 +432,7 @@ def essais_hooks(b: Banc) -> None:
         assert b.fin_de_tour() == ""
     b.modifier()
     raison = b.fin_de_tour()
-    assert "3 vérifications ont rendu ÉCHEC" in raison and "Ne relance pas de verifier" in raison, raison
+    assert "3 vérifications ont rendu ÉCHEC" in raison and "ne relance plus de vérification sur du non-critique" in raison and "se corrige toujours" in raison, raison
     assert os.path.join(b.session, "rapports", "l3.md") in raison and b.page in raison
     b.modifier()
     sortie: dict = b.hook("Stop", background_tasks=[])
@@ -449,6 +449,37 @@ def essais_hooks(b: Banc) -> None:
     b.modifier()
     raison = b.fin_de_tour()
     assert "sans vérification" in raison and "ont rendu ÉCHEC" not in raison
+    # Verdicts venus seulement du transcript (verifiers en arrière-plan) : ils comptent pour la limite
+    b.repartir()
+    for numero in (1, 2, 3):
+        b.modifier()
+        b.fin_de_tour()
+        b.lancer("t%d" % numero)
+        b.hook("SubagentStop", agent_id="t%d" % numero, agent_type=VERIFIER, last_assistant_message="Je lance les tests.")
+        b.notification("t%d" % numero, rapport("ÉCHEC", "NON"))
+        b.fin_de_tour()
+    b.modifier()
+    raison = b.fin_de_tour()
+    assert "3 vérifications ont rendu ÉCHEC" in raison, raison[:200]
+    assert all(os.path.isfile(os.path.join(b.session, "rapports", "t%d.md" % n)) for n in (1, 2, 3))
+    # Un réglage invalide est ignoré : la limite par défaut (3) tient
+    for invalide in ('"1"', "-1", "true", "2.5", "null", "[1]"):
+        b.repartir()
+        b.regler('{"max_verifications": %s}' % invalide)
+        b.modifier()
+        b.lancer("i1")
+        b.finir("i1", rapport("ÉCHEC", "NON"))
+        b.modifier()
+        raison = b.fin_de_tour()
+        assert "Le dernier verifier a rendu" in raison and "ont rendu ÉCHEC depuis" not in raison, invalide
+    b.regler()
+    # Un agent_id très long ou hostile reste dans rapports/, sous un nom court
+    b.repartir()
+    b.modifier()
+    b.lancer("é" * 200)
+    b.finir("é" * 200, rapport("ÉCHEC", "NON"))
+    noms: list = os.listdir(os.path.join(b.session, "rapports"))
+    assert len(noms) == 1 and len(noms[0].encode()) <= 104, noms
     # Limite réglable, 0 : pas de limite
     b.repartir()
     b.regler({"max_verifications": 0})
@@ -459,7 +490,7 @@ def essais_hooks(b: Banc) -> None:
         b.finir("m%d" % numero, rapport("ÉCHEC", "NON"))
     b.modifier()
     raison = b.fin_de_tour()
-    assert "vérification ciblée" in raison and "ont rendu ÉCHEC depuis" not in raison, repr(raison[:300])
+    assert "Le dernier verifier a rendu" in raison and "ont rendu ÉCHEC depuis" not in raison, repr(raison[:300])
     b.regler()
     # Une notification intermédiaire (l'agent attend son propre travail) n'est pas un rapport sans verdict
     b.repartir()

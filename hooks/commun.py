@@ -126,7 +126,9 @@ def chemin_rapport(session_id: str, agent_id: object) -> str:
     dossier: str = dossier_session(session_id)
     if not dossier or not agent_id:
         return ""
-    return os.path.join(dossier, "rapports", re.sub(r"[^\w-]", "_", str(agent_id)) + ".md")
+    # Un nom simple et court : rien ne sort de rapports/, et la limite de 255 octets d'un nom de fichier tient
+    nom: str = re.sub(r"[^A-Za-z0-9_-]", "_", str(agent_id))[:100]
+    return os.path.join(dossier, "rapports", nom + ".md")
 
 
 def enregistrer_rapport(session_id: str, agent_id: object, texte: object) -> str:
