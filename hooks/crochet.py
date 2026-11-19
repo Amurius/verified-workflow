@@ -229,9 +229,9 @@ def decider(journal: list, entree: dict, maintenant: float, rapports, reglages: 
                 elif recus:
                     dernier_message = recus[-1][1]
 
+    generation: float = max((e["t"] for e in journal if e["ev"] == "archive"), default=0.0)
     # Autres verifiers de la même génération (lancés depuis la dernière archive) : tant que l'un d'eux
     # tourne encore, ou a rendu un verdict défavorable pendant ou après le dernier lancé, rien n'est validé
-    generation: float = max((e["t"] for e in journal if e["ev"] == "archive"), default=0.0)
     contredit: bool = False
     for autre in {e.get("agent_id"): e for e in lancements if e["t"] > generation and e.get("agent_id") != identifiant}.values():
         rendu: dict = verdict_de(autre.get("agent_id") or "", autre["t"])
@@ -254,7 +254,33 @@ def decider(journal: list, entree: dict, maintenant: float, rapports, reglages: 
         if not nouvelles or au_travail or auteur_en_attente(journal, non_verifiees, shells, maintenant):
             return decision
         if due:
-            decision["blocage"] = ("dette", {"modifs": non_verifiees, "anciennes": len(non_verifiees) - len(nouvelles), "sensibles": sensibles})
+            details: dict = {"modifs": non_verifiees, "anciennes": len(non_verifiees) - len(nouvelles), "sensibles": sensibles}
+            # Limite : après N vérifications en ÉCHEC depuis la dernière validation, on ne boucle plus. Le hook
+            # demande une fois de présenter ce qui reste à l'utilisateur, puis le note seulement.
+            limite: int = int(reglages.get("max_verifications") or 0)
+            echecs: set = {
+                e.get("agent_id") for e in lancements
+                if e["t"] > generation and (verdict_de(e.get("agent_id") or "", e["t"]).get("verdict") == "ÉCHEC")
+            }
+            if dernier and verdict and verdict["verdict"] == "ÉCHEC":
+                echecs.add(identifiant)
+            if limite and len(echecs) >= limite:
+                details["echecs"] = len(echecs)
+                details["limite"] = limite
+                details["precedent"] = {"agent_id": identifiant, "verdict": "ÉCHEC"}
+                if not any(b.get("motif") == "limite" and b["t"] >= (verdict or {}).get("t", instant_verifier) for b in blocages):
+                    decision["blocage"] = ("limite", details)
+                else:
+                    decision["note"] = (
+                        "verified-workflow : limite de %d vérifications en ÉCHEC atteinte ; %d fichier(s) modifié(s) "
+                        "depuis restent non vérifiés (%s). L'utilisateur décide de la suite." % (
+                            limite, len(fichiers), ", ".join(os.path.basename(f) for f in fichiers[:5])))
+                return decision
+            # Après un ÉCHEC, les modifications suivantes sont des corrections : elles se vérifient de façon
+            # ciblée, à partir du rapport qui les a demandées, sans refaire le tour complet
+            if dernier and verdict and verdict["verdict"] == "ÉCHEC":
+                details["precedent"] = {"agent_id": identifiant, "verdict": verdict["verdict"]}
+            decision["blocage"] = ("dette", details)
         else:
             dernier_rappel: float = max((e["t"] for e in journal if e["ev"] == "note"), default=0.0)
             if any(m["t"] > dernier_rappel for m in non_verifiees):
@@ -328,6 +354,16 @@ def message_dette(session_id: str, details: dict, reglages: object = None) -> st
         candidats: list = commun.fiches_possibles(racine)
         presente: list = [c for c in candidats if os.path.isfile(c)]
         fiches.append("%s (%s)" % (presente[0], "présente") if presente else "%s (absente)" % candidats[0])
+    ciblee: str = ""
+    precedent: dict = details.get("precedent") or {}
+    rapport_precedent: str = commun.chemin_rapport(session_id, precedent.get("agent_id"))
+    if rapport_precedent and os.path.isfile(rapport_precedent):
+        ciblee = (
+            "\nLe dernier verifier a rendu %s ; son rapport est gardé dans %s. Si ces modifications corrigent ce qu'il a "
+            "relevé, écris « vérification ciblée » en tête du brief (avant « petite modification » s'il y a lieu), donne "
+            "ce chemin et la liste des corrections faites : le verifier éprouvera ces corrections et la non-régression des "
+            "fichiers modifiés depuis, sans refaire le tour complet. Si tu as fait autre chose qu'en corriger, lance une "
+            "vérification complète.\n" % (precedent.get("verdict"), rapport_precedent))
     rappel: str = ""
     if details.get("anciennes"):
         rappel = ("\nUne partie de ces fichiers avait déjà été signalée à un tour précédent et n'a toujours pas "
@@ -344,7 +380,7 @@ def message_dette(session_id: str, details: dict, reglages: object = None) -> st
         taille += " Fichier(s) à vérifier quoi qu'il arrive : %s." % ", ".join(os.path.basename(f) for f in details["sensibles"][:5])
     return (
         "Des fichiers de projet ont été modifiés sans vérification indépendante depuis :\n"
-        + "\n".join(lignes) + "\n" + rappel + "\n" + taille + "\n"
+        + "\n".join(lignes) + "\n" + rappel + ciblee + "\n" + taille + "\n"
         "Fichier repère de la session : %s\n"
         "Copies d'avant modification : %s\n"
         "Fiche de vérification du projet : %s\n\n"
@@ -355,6 +391,28 @@ def message_dette(session_id: str, details: dict, reglages: object = None) -> st
         "cosmétique d'un commentaire, travail encore en cours qui sera vérifié d'un bloc), explique pourquoi à "
         "l'utilisateur dans ta réponse : ces fichiers resteront signalés à la prochaine modification."
         % (commun.chemin_repere(session_id), commun.dossier_copies(session_id), " ; ".join(fiches) or "aucune racine de projet reconnue")
+    )
+
+
+def message_limite(session_id: str, details: dict) -> str:
+    chemins: list = []
+    for modif in details["modifs"]:
+        if (modif.get("chemin") or "") not in chemins:
+            chemins.append(modif.get("chemin") or "")
+    lignes: list = ["- %s" % chemin for chemin in chemins[:MAX_FICHIERS_LISTES]]
+    if len(chemins) > MAX_FICHIERS_LISTES:
+        lignes.append("- ... et %d autres fichiers" % (len(chemins) - MAX_FICHIERS_LISTES))
+    rapport: str = commun.chemin_rapport(session_id, (details.get("precedent") or {}).get("agent_id"))
+    return (
+        "%d vérifications ont rendu ÉCHEC depuis la dernière validation : c'est la limite (%d, réglage "
+        "`max_verifications`). Ne relance pas de verifier de toi-même, pour ne pas boucler.\n\n"
+        "Fichiers modifiés depuis la dernière vérification, non vérifiés :\n%s\n\n"
+        "Rapport de la dernière vérification : %s\n\n"
+        "Présente à l'utilisateur ce que la dernière vérification a relevé, ce qui a été corrigé depuis sans être "
+        "vérifié, et ce qui reste ouvert. Laisse-le trancher : accepter en l'état avec ces réserves, autoriser une "
+        "vérification de plus (ciblée), ou arrêter. Tant qu'il n'a pas tranché, ces fichiers restent signalés sans "
+        "bloquer." % (details.get("echecs", 0), details.get("limite", 0), "\n".join(lignes),
+                      rapport if rapport and os.path.isfile(rapport) else "non gardé")
     )
 
 
@@ -474,7 +532,9 @@ def agent_fin(entree: dict) -> None:
     if commun.est_verifier(entree.get("agent_type")):
         lu: dict = lire_verdict(entree.get("last_assistant_message"))
         champs.update(lu)
-        if not lu:
+        if lu:
+            commun.enregistrer_rapport(entree.get("session_id") or "", entree.get("agent_id"), entree.get("last_assistant_message"))
+        else:
             champs["apercu"] = " ".join(str(entree.get("last_assistant_message") or "").split())[:240]
     commun.noter(entree.get("session_id") or "", "agent_fin", **champs)
 
@@ -526,8 +586,18 @@ def fin_de_tour(entree: dict) -> None:
     if relance and blocages_de_la_relance(journal) >= MAX_BLOCAGES_PAR_RELANCE:
         return
     motif, details = decision["blocage"]
+    precedent: dict = (details.get("precedent") or {}) if motif in ("dette", "limite") else {}
+    chemin_precedent: str = commun.chemin_rapport(session_id, precedent.get("agent_id"))
+    if chemin_precedent and not os.path.isfile(chemin_precedent):
+        # Verdict lu dans le transcript (agent en arrière-plan) : le rapport n'a pas encore été gardé
+        for _, texte in reversed(rapports_du_transcript(entree.get("transcript_path"), precedent.get("agent_id") or "")):
+            if lire_verdict(texte):
+                commun.enregistrer_rapport(session_id, precedent.get("agent_id"), texte)
+                break
     if motif == "dette":
         message: str = message_dette(session_id, details, reglages)
+    elif motif == "limite":
+        message = message_limite(session_id, details)
     elif motif == "sans_verdict":
         message = message_sans_verdict(decision["verifier"], details)
     else:

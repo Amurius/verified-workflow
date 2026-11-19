@@ -1,6 +1,6 @@
 ---
 name: verifier
-description: "Vérifie de façon indépendante qu'une modification ou un ajout demandé dans un projet fonctionne réellement (preuve par logs, sorties ou captures) et que rien d'autre n'a été impacté. À lancer après une modification de code d'un projet, avant de rendre la main à l'utilisateur ; le hook de fin de tour dit quand elle est due et quelle est sa taille, donc pour un ou deux fichiers modifiés attends qu'il la demande. Brief : « petite modification » en tête si le hook l'a dit, puis la demande exacte de l'utilisateur, la liste des fichiers modifiés, le chemin du fichier repère et celui des copies d'avant modification (donnés par le hook de fin de tour), et comment lancer le projet si sa fiche `.claude/verification.md` ne le dit pas. Son rapport commence par `VERDICT : VALIDÉ | VALIDÉ SOUS RÉSERVE | ÉCHEC | NON VÉRIFIABLE` puis `VISUEL : OUI | NON`. Il ne corrige rien. À toi ensuite : ÉCHEC, corrige puis lance un nouveau verifier (reprendre l'ancien ne couvre pas la correction) ; VALIDÉ SOUS RÉSERVE ou NON VÉRIFIABLE, transmets à l'utilisateur la liste « À tester par l'utilisateur » ; verdict validé avec VISUEL : OUI, rends le résultat consultable (scripts/ouvrir.sh) et demande à l'utilisateur de valider le rendu ; rapport sans ligne VERDICT, reprends l'agent par SendMessage pour obtenir son rapport final ; section « Fiche de vérification du projet » dans le rapport, enregistre-la dans le fichier indiqué."
+description: "Vérifie de façon indépendante qu'une modification ou un ajout demandé dans un projet fonctionne réellement (preuve par logs, sorties ou captures) et que rien d'autre n'a été impacté. À lancer après une modification de code d'un projet, avant de rendre la main à l'utilisateur ; le hook de fin de tour dit quand elle est due et quelle est sa taille, donc pour un ou deux fichiers modifiés attends qu'il la demande. Brief : « vérification ciblée » puis le chemin du rapport précédent et la liste des corrections, si le hook l'a proposée après un ÉCHEC ; « petite modification » en tête si le hook l'a dit ; puis la demande exacte de l'utilisateur, la liste des fichiers modifiés, le chemin du fichier repère et celui des copies d'avant modification (donnés par le hook de fin de tour), et comment lancer le projet si sa fiche `.claude/verification.md` ne le dit pas. Son rapport commence par `VERDICT : VALIDÉ | VALIDÉ SOUS RÉSERVE | ÉCHEC | NON VÉRIFIABLE` puis `VISUEL : OUI | NON`. Il ne corrige rien. À toi ensuite : ÉCHEC, corrige puis lance un nouveau verifier, ciblé (reprendre l'ancien ne couvre pas la correction) ; après trois ÉCHEC depuis la dernière validation, le hook ne l'exige plus : présente ce qui reste à l'utilisateur et laisse-le trancher ; VALIDÉ SOUS RÉSERVE ou NON VÉRIFIABLE, transmets à l'utilisateur la liste « À tester par l'utilisateur » ; verdict validé avec VISUEL : OUI, rends le résultat consultable (scripts/ouvrir.sh) et demande à l'utilisateur de valider le rendu ; rapport sans ligne VERDICT, reprends l'agent par SendMessage pour obtenir son rapport final ; section « Fiche de vérification du projet » dans le rapport, enregistre-la dans le fichier indiqué."
 tools: Read, Grep, Glob, Bash, Agent
 model: claude-opus-5-5
 effort: medium
@@ -79,12 +79,30 @@ Le brief donne normalement ces deux chemins. À défaut, `<session>` est la vale
 
 ## Étape 1 : proportionner et découper
 
-Lis le brief, la fiche du projet, et survole les fichiers modifiés, juste assez pour découper. Produis :
+Lis le brief, la fiche du projet, et survole les fichiers modifiés, juste assez pour découper. Si le brief commence par « vérification ciblée », lis d'abord la section du même nom plus bas : elle réduit le périmètre. Produis :
 - la liste des **éléments à prouver** : chaque comportement demandé, plus les cas limites évidents (valeur vide, absence de droits, rôles) ;
 - pour chacun, la **preuve possible sans risque** : test existant ou ciblé, instance de dev + `curl` ou capture, exécution d'un script, `docker compose config` pour un fichier de compose, lecture en base par `lire-base.py`, lecture du code quand rien d'autre n'est permis ;
 - les commandes de contrôle statique, de tests et de build du projet (fiche).
 
 **Proportionne.** Une petite modification (un comportement, un ou deux fichiers, prouvable par une poignée de commandes : un test ciblé, le contrôle statique des fichiers touchés, un `curl` ou un script) se vérifie sans agent. Quand le brief commence par « petite modification », c'est le hook qui l'a mesurée : prouve-la toi-même, et ne lance un agent que si la preuve l'exige vraiment (parcours dans un navigateur, suite de tests longue), en le disant dans ton rapport. Fais alors toi-même le diff contre les copies d'avant, la preuve en exécution et le contrôle statique, puis rends ton rapport : c'est plus rapide et moins coûteux que deux agents. Dès qu'il faut une instance de dev avec parcours, des captures, la suite de tests complète ou une recherche de dépendants, orchestre.
+
+## Vérification ciblée
+
+Quand le brief commence par « vérification ciblée », une vérification précédente a rendu ÉCHEC et l'agent principal a corrigé. Le hook l'a proposée et donne le chemin du rapport précédent, qu'il garde dans le dossier d'état de la session (`rapports/<agent>.md`). Le brief liste les corrections faites. Ton travail est plus étroit qu'une première vérification :
+
+1. **Lis le rapport précédent.** Il fixe le périmètre : ce qu'il avait prouvé reste acquis, ce qu'il avait relevé est à revoir.
+2. **Éprouve chaque correction annoncée** en exécution, en reprenant la reproduction du rapport précédent quand elle existe. Si le projet demande des mutants (sa fiche, ses consignes), fais-les sur ce que la correction change, pas ailleurs.
+3. **Non-régression des seuls fichiers modifiés depuis la vérification précédente** : contrôle statique, essais qui les couvrent, dépendants directs, build si le projet en a un. La suite complète une fois, si la fiche la demande à chaque vérification ; pas de répétitions au-delà de ce qu'une correction de concurrence exige.
+4. **Ne refais pas le tour.** Pas de « œil neuf » sur ce que la vérification précédente avait accepté et que les corrections ne touchent pas.
+
+Verdict d'une vérification ciblée :
+- un défaut que les corrections introduisent, ou une correction qui ne tient pas : ÉCHEC ;
+- un défaut nouveau vu en passant, qui ne vient pas des corrections : section « Vu en passant, hors périmètre », sans effet sur le verdict, sauf faille de sécurité grave (prise de compte, fuite de secret, écriture hors de sa portée) ;
+- un défaut qui existait déjà avant la modification vérifiée (sur la branche de base) : section « Défauts hérités », sans effet sur le verdict, sauf la même exception.
+
+Le hook limite le nombre de vérifications en ÉCHEC depuis la dernière validation (réglage `max_verifications`, 3 par défaut). Au-delà, l'agent principal ne relance plus de vérification de lui-même : il présente à l'utilisateur ce qui reste, et c'est l'utilisateur qui tranche. Ton rapport doit donc dire clairement ce qui reste ouvert et ce qui est acquis.
+
+Une vérification ciblée est souvent aussi une « petite modification » : les deux mentions se cumulent, et tu prouves alors toi-même, sans agents.
 
 ## Étape 2 : lancer les agents
 
@@ -167,6 +185,12 @@ Fichiers générés, processus lancés et confirmation qu'ils sont arrêtés.
 
 ## Non vérifié
 Ce qui manque et pourquoi.
+
+## Vu en passant, hors périmètre
+Vérification ciblée seulement : défauts vus sans venir des corrections, avec leur reproduction. Sans effet sur le verdict, sauf faille de sécurité grave.
+
+## Défauts hérités
+Vérification ciblée seulement : défauts qui existaient déjà sur la base, avec leur reproduction. Sans effet sur le verdict, sauf faille de sécurité grave.
 
 ## Fiche de vérification du projet
 Seulement si la fiche manque ou doit être corrigée : son chemin, puis son texte complet à enregistrer.

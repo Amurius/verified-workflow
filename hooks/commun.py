@@ -48,6 +48,9 @@ REGLAGES_PAR_DEFAUT: dict = {
     "seuil_fichiers": 1,
     # Sous ces deux bornes, la modification est dite « petite » : le verifier la prouve seul, sans agents.
     "petite_modification": {"fichiers": 2, "lignes": 60},
+    # Nombre de vérifications en ÉCHEC, depuis la dernière validation, au-delà duquel le hook n'exige plus de
+    # nouveau verifier : il demande de présenter ce qui reste à l'utilisateur, qui tranche. 0 : pas de limite.
+    "max_verifications": 3,
     # Fichiers dont la modification exige toujours une vérification, quel que soit le seuil
     "toujours_verifier": [
         "*.sql", "*/migrations/*", "*/drizzle/*", "schema.ts", "models.py",
@@ -116,6 +119,28 @@ def chemin_repere(session_id: str) -> str:
 
 def dossier_copies(session_id: str) -> str:
     return os.path.join(dossier_session(session_id), "avant")
+
+
+def chemin_rapport(session_id: str, agent_id: object) -> str:
+    """Où le rapport d'un verifier est gardé pour une vérification ciblée, ou "" sans session ni agent."""
+    dossier: str = dossier_session(session_id)
+    if not dossier or not agent_id:
+        return ""
+    return os.path.join(dossier, "rapports", re.sub(r"[^\w-]", "_", str(agent_id)) + ".md")
+
+
+def enregistrer_rapport(session_id: str, agent_id: object, texte: object) -> str:
+    """Garde le rapport d'un verifier (privé, 0600). Une vérification ciblée part de lui."""
+    chemin: str = chemin_rapport(session_id, agent_id)
+    if not chemin or not isinstance(texte, str) or not texte.strip():
+        return ""
+    creer(os.path.dirname(chemin))
+    descripteur: int = os.open(chemin, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    try:
+        os.write(descripteur, texte.encode("utf-8"))
+    finally:
+        os.close(descripteur)
+    return chemin
 
 
 # --- Journal --------------------------------------------------------------------------------------
@@ -203,6 +228,9 @@ def _appliquer_reglages(valeurs: dict, lus: dict) -> None:
         for cle in ("fichiers", "lignes"):
             if isinstance(petite.get(cle), int) and not isinstance(petite.get(cle), bool) and petite[cle] >= 0:
                 valeurs["petite_modification"][cle] = petite[cle]
+    maximum = lus.get("max_verifications")
+    if isinstance(maximum, int) and not isinstance(maximum, bool) and maximum >= 0:
+        valeurs["max_verifications"] = maximum
     motifs = lus.get("toujours_verifier")
     if isinstance(motifs, list) and all(isinstance(m, str) for m in motifs):
         valeurs["toujours_verifier"] = motifs

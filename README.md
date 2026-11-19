@@ -68,7 +68,8 @@ Scripts (`scripts/`) :
 4. Le rapport commence par `VERDICT : ...` et `VISUEL : OUI/NON`.
    - **VALIDÉ** : tout est prouvé en exécution.
    - **VALIDÉ SOUS RÉSERVE** : tout ce qui peut s'exécuter ici est prouvé ; le reste (appareil, redéploiement) est listé pour l'utilisateur.
-   - **ÉCHEC** : Claude corrige et lance un nouveau verifier. Une modification n'est couverte que par un verifier lancé après elle : reprendre l'ancien par message ne suffit pas.
+   - **ÉCHEC** : Claude corrige et lance un nouveau verifier. Une modification n'est couverte que par un verifier lancé après elle : reprendre l'ancien par message ne suffit pas. Ce nouveau verifier est **ciblé** : le hook garde le rapport de l'ÉCHEC (`rapports/<agent>.md` dans le dossier de la session) et propose d'écrire « vérification ciblée » en tête du brief, avec ce chemin et la liste des corrections. Le verifier éprouve alors les corrections et la non-régression des fichiers modifiés depuis, sans refaire le tour : un défaut vu en passant ou hérité de la base est noté sans faire échouer, sauf faille de sécurité grave.
+   - **Limite** : après trois vérifications en ÉCHEC depuis la dernière validation (`max_verifications`), le hook n'exige plus de nouveau verifier. Il demande une fois de présenter ce qui reste à l'utilisateur, qui tranche (accepter avec réserves, une vérification de plus, arrêter), puis ne fait plus qu'une note à chaque fin de tour. Une validation remet le compte à zéro.
    - **NON VÉRIFIABLE** : le comportement demandé n'a pas pu être observé.
    - Un verifier qui rend la main sans verdict, alors que plus rien ne tourne, est signalé : le hook demande de le reprendre.
    - Avec plusieurs verifiers lancés en parallèle, rien n'est validé tant que l'un d'eux tourne encore ou a rendu un verdict défavorable.
@@ -85,6 +86,7 @@ Deux fichiers `reglages.json`, relus à chaque fin de tour (pas besoin de rechar
 |---|---|---|
 | `seuil_fichiers` | `1` | Nombre de fichiers de projet modifiés à partir duquel le hook exige une vérification. Avec `3`, une modification d'un ou deux fichiers n'est pas vérifiée tout de suite : elle reste notée, l'utilisateur en est averti à la fin du tour, et elle est vérifiée avec les suivantes dès que trois fichiers sont en attente. |
 | `petite_modification` | 2 fichiers, 60 lignes | Sous ces deux bornes, le hook annonce une « petite modification » : le verifier la prouve seul, sans lancer d'agents. |
+| `max_verifications` | `3` | Nombre de vérifications en ÉCHEC, depuis la dernière validation, à partir duquel le hook n'exige plus de nouveau verifier et demande de laisser l'utilisateur trancher. `0` : pas de limite. |
 | `toujours_verifier` | migrations, SQL, compose, Dockerfile, dépendances, `.env`, `auth/` | Fichiers dont la modification exige une vérification immédiate et complète, quel que soit le seuil. |
 
 Exemple de fichier personnel : `{ "seuil_fichiers": 3 }`.
